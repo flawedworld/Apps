@@ -157,7 +157,9 @@ class MetaDataHelper constructor(context: Context) {
                     }
                 }
             }
-            result[pkgName] = Package(pkgName, variants)
+            if (variants.isNotEmpty()) {
+                result[pkgName] = Package(pkgName, variants)
+            }
         }
         return result
     }
