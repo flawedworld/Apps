@@ -23,7 +23,6 @@ import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.Observer
 import com.google.android.material.color.DynamicColors
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CompletableJob
@@ -165,7 +164,49 @@ class App : Application() {
     }
 
     private fun updateLiveData() {
+
+        /*copy the current (updated) value */
+        val values = mutableListOf<PackageInfo>()
+        values.addAll(packagesInfo.values)
+
+        /*update live data with current value*/
         packagesMutableLiveData.postValue(packagesInfo)
+
+        /*process current value*/
+        var allTaskCompleted = true
+        var foregroundServiceNeeded = false
+
+        for (packageInfo in values) {
+            val task = packageInfo.taskInfo
+
+            if (task.progress == DOWNLOAD_TASK_FINISHED) {
+                notificationMgr.cancel(task.id)
+            } else {
+                val notification = Notification.Builder(this, BACKGROUND_SERVICE_CHANNEL)
+                    .setSmallIcon(R.mipmap.ic_launcher)
+                    .setContentTitle(task.title)
+                    .setOnlyAlertOnce(true)
+                    .setProgress(100, task.progress, false)
+                    .build()
+                notification.flags = Notification.FLAG_ONGOING_EVENT
+                notificationMgr.notify(task.id, notification)
+                allTaskCompleted = false
+                foregroundServiceNeeded = true
+            }
+        }
+
+        isDownloadRunning.postValue(allTaskCompleted)
+
+        if (!isServiceRunning) {
+            if (foregroundServiceNeeded && !isSeamlessUpdateRunning()) {
+                startService(
+                    Intent(
+                        this@App,
+                        KeepAppActive::class.java
+                    )
+                )
+            }
+        }
     }
 
     fun installIntentResponse(sessionId: Int, errorMsg: String, userDeclined: Boolean = false) {
@@ -219,9 +260,9 @@ class App : Application() {
                         )
                     )
                     packagesInfo[pkgName] = info.withUpdatedInstallStatus(installStatus)
-                    updateLiveData()
                 }
             }
+            updateLiveData()
             return MetadataCallBack.Success(res.timestamp)
         } catch (e: GeneralSecurityException) {
             return MetadataCallBack.SecurityError(e)
@@ -596,47 +637,7 @@ class App : Application() {
     override fun onTerminate() {
         super.onTerminate()
         unregisterReceiver(appsChangesReceiver)
-        packageLiveData.removeObserver(observer)
         executor.shutdown()
-    }
-
-    private val observer = Observer<Map<String, PackageInfo>> { infos ->
-
-        var allTaskCompleted = true
-        var foregroundServiceNeeded = false
-        val values = infos.values
-
-        for (packageInfo in values) {
-            val task = packageInfo.taskInfo
-
-            if (task.progress == DOWNLOAD_TASK_FINISHED) {
-                notificationMgr.cancel(task.id)
-            } else {
-                val notification = Notification.Builder(this, BACKGROUND_SERVICE_CHANNEL)
-                    .setSmallIcon(R.mipmap.ic_launcher)
-                    .setContentTitle(task.title)
-                    .setOnlyAlertOnce(true)
-                    .setProgress(100, task.progress, false)
-                    .build()
-                notification.flags = Notification.FLAG_ONGOING_EVENT
-                notificationMgr.notify(task.id, notification)
-                allTaskCompleted = false
-                foregroundServiceNeeded = true
-            }
-        }
-
-        isDownloadRunning.postValue(allTaskCompleted)
-
-        if (!isServiceRunning) {
-            if (foregroundServiceNeeded && !isSeamlessUpdateRunning()) {
-                startService(
-                    Intent(
-                        this@App,
-                        KeepAppActive::class.java
-                    )
-                )
-            }
-        }
     }
 
     override fun onCreate() {
@@ -666,7 +667,6 @@ class App : Application() {
         })
 
         context = WeakReference(this)
-        packageLiveData.observeForever(observer)
 
         jobPsfsMgr.onJobPsfsChanged { isEnabled, networkType, time ->
             if (isEnabled) {
